@@ -13,7 +13,7 @@ crc = { path = "../crc" }
 
 # 一个无锁MPSC队列
 [dependencies.thingbuf]
-git = "https://git.mirrors.dragonos.org.cn/DragonOS-Community/thingbuf.git"
-rev = "2dded730c3"
+git = "https://github.com/xiaolin2004/thingbuf.git"
+rev = "b669f00"
 default-features = false
 features = ["alloc", "static"]

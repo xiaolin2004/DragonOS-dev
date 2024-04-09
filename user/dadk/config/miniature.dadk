@@ -1,0 +1,23 @@
+{
+  "name": "miniature",
+  "version": "0.1.0",
+  "description": "一个微型的机器学习框架",
+  "task_type": {
+    "BuildFromSource": {
+      "Local": {
+        "path": "apps/miniature"
+      }
+    }
+  },
+  "depends": [],
+  "build": {
+    "build_command": "make install"
+  },
+  "install": {
+    "in_dragonos_path": "/"
+  },
+  "clean": {
+    "clean_command": "make clean"
+  },
+  "envs": []
+}

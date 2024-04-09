@@ -3,11 +3,11 @@ use crate::driver::base::block::block_device::{BlockDevice, BlockId};
 use crate::driver::base::block::disk_info::Partition;
 use crate::driver::base::block::SeekFrom;
 use crate::driver::base::class::Class;
-use crate::driver::base::device::bus::Bus;
+use crate::driver::base::device::bus::{Bus, BusState};
 
 use crate::driver::base::device::driver::Driver;
-use crate::driver::base::device::{Device, DeviceType, IdTable};
-use crate::driver::base::kobject::{KObjType, KObject, KObjectState};
+use crate::driver::base::device::{Device, DevicePrivateData, DeviceType, IdTable};
+use crate::driver::base::kobject::{KObjType, KObject, KObjectState, LockedKObjectState};
 use crate::driver::base::kset::KSet;
 use crate::driver::disk::ahci::HBA_PxIS_TFES;
 
@@ -25,6 +25,7 @@ use crate::{
     },
     kerror,
 };
+use alloc::string::ToString;
 use system_error::SystemError;
 
 use alloc::sync::Weak;
@@ -48,7 +49,12 @@ pub struct AhciDisk {
 
 /// @brief: 带锁的AhciDisk
 #[derive(Debug)]
-pub struct LockedAhciDisk(pub SpinLock<AhciDisk>);
+pub struct LockedAhciDisk {
+    pub lock: SpinLock<AhciDisk>,
+    pub inner:SpinLock<InnerLockedAhciDisk>,
+    pub kobj_state:LockedKObjectState,
+}
+
 /// 函数实现
 impl Debug for AhciDisk {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -62,6 +68,8 @@ impl Debug for AhciDisk {
 }
 
 impl AhciDisk {
+    /// TODO 在此加入多发读取支持
+    /// TODO 借助该程序搞懂读取时的位设置过程
     fn read_at(
         &self,
         lba_id_start: BlockId, // 起始lba编号
@@ -78,10 +86,10 @@ impl AhciDisk {
         } else if count == 0 {
             return Ok(0);
         }
-
+        // 找到设备对应控制器端口
         let port = _port(self.ctrl_num, self.port_num);
         volatile_write!(port.is, u32::MAX); // Clear pending interrupt bits
-
+                                            // 在端口中寻找剩余的slot
         let slot = port.find_cmdslot().unwrap_or(u32::MAX);
 
         if slot == u32::MAX {
@@ -96,7 +104,7 @@ impl AhciDisk {
                 .as_mut()
                 .unwrap()
         };
-
+        // 计算并设置FIS的长度，告知控制器应该发送多少长度的DW给设备
         cmdheader.cfl = (size_of::<FisRegH2D>() / size_of::<u32>()) as u8;
 
         volatile_set_bit!(cmdheader.cfl, 1 << 6, false); //  Read/Write bit : Read from device
@@ -119,7 +127,7 @@ impl AhciDisk {
         if kbuf.is_some() {
             buf_ptr = kbuf.as_mut().unwrap().as_mut_ptr() as usize;
         }
-
+        // 获得内核空间中command table的地址
         #[allow(unused_unsafe)]
         let cmdtbl = unsafe {
             (phys_2_virt(volatile_read!(cmdheader.ctba) as usize) as *mut HbaCmdTable)
@@ -135,10 +143,14 @@ impl AhciDisk {
         // kdebug!("cmdheader.prdtl={}", volatile_read!(cmdheader.prdtl));
 
         // 8K bytes (16 sectors) per PRDT
+        // prdtl是请求中Physical Region Descriptor Table的数量
+        // 先将前prdtl-1个写满，让最后一个写入剩下的
         for i in 0..((volatile_read!(cmdheader.prdtl) - 1) as usize) {
+            // 设置写入物理内存地址
             volatile_write!(cmdtbl.prdt_entry[i].dba, virt_2_phys(buf_ptr) as u64);
+            // 设置写入数据长度
             cmdtbl.prdt_entry[i].dbc = 8 * 1024 - 1;
-            volatile_set_bit!(cmdtbl.prdt_entry[i].dbc, 1 << 31, true); // 允许中断 prdt_entry.i
+            volatile_set_bit!(cmdtbl.prdt_entry[i].dbc, 1 << 31, true); // （为什么是）允许中断 prdt_entry.i
             buf_ptr += 8 * 1024;
             tmp_count -= 16;
         }
@@ -148,9 +160,11 @@ impl AhciDisk {
         volatile_write!(cmdtbl.prdt_entry[las].dba, virt_2_phys(buf_ptr) as u64);
         cmdtbl.prdt_entry[las].dbc = ((tmp_count << 9) - 1) as u32; // 数据长度
 
-        volatile_set_bit!(cmdtbl.prdt_entry[las].dbc, 1 << 31, true); // 允许中断
+        volatile_set_bit!(cmdtbl.prdt_entry[las].dbc, 1 << 31, true); // （为什么是）允许中断
 
         // 设置命令
+        // Command FIS (CFIS) 专门为软件提供的FIS
+        // 读取指针
         let cmdfis = unsafe {
             ((&mut cmdtbl.cfis) as *mut [u8] as *mut usize as *mut FisRegH2D)
                 .as_mut()
@@ -186,10 +200,14 @@ impl AhciDisk {
             kerror!("Port is hung");
             return Err(SystemError::EIO);
         }
-
+        //设置command issue，表示对应的command slot任务生效
         volatile_set_bit!(port.ci, 1 << slot, true); // Issue command
                                                      // kdebug!("To wait ahci read complete.");
                                                      // 等待操作完成
+
+        // 只要在这里支持并发，就可以实现并行读取
+
+        //When the HBA receives a FIS which clears the BSY, DRQ, and ERR bits for the command, it clears the corresponding bit in this register for that command slot.
         loop {
             if (volatile_read!(port.ci) & (1 << slot)) == 0 {
                 break;
@@ -428,62 +446,81 @@ impl LockedAhciDisk {
         return Ok(table);
     }
 }
+#[derive(Debug,Clone)]
+pub struct InnerLockedAhciDisk{
+    name:String,
+    data:DevicePrivateData,
+    state:BusState,  
+    parent:Option<Weak<dyn KObject>>,
 
+    kernfs_inode:Option<Arc<KernFSInode>>,
+    /// 当前设备挂载到的总线
+    bus:Option<Weak<dyn Bus>>,
+    /// 当前设备已经匹配的驱动
+    driver:Option<Weak<dyn Driver>>,
+
+    ktype:Option<&'static dyn KObjType>,
+    kset: Option<Arc<KSet>>,
+}
+
+impl InnerLockedAhciDisk{
+
+}
 impl KObject for LockedAhciDisk {
     fn as_any_ref(&self) -> &dyn core::any::Any {
         self
     }
 
     fn inode(&self) -> Option<Arc<KernFSInode>> {
-        todo!()
+        self.inner.lock().kernfs_inode
     }
 
     fn kobj_type(&self) -> Option<&'static dyn KObjType> {
-        todo!()
+        self.inner.lock().ktype
     }
 
     fn kset(&self) -> Option<Arc<KSet>> {
-        todo!()
+        self.inner.lock().kset
     }
 
     fn parent(&self) -> Option<Weak<dyn KObject>> {
-        todo!()
+        self.inner.lock().parent
     }
 
     fn set_inode(&self, _inode: Option<Arc<KernFSInode>>) {
-        todo!()
+        self.inner.lock().kernfs_inode = _inode;
     }
 
     fn kobj_state(&self) -> RwLockReadGuard<KObjectState> {
-        todo!()
+        self.kobj_state.read()
     }
 
     fn kobj_state_mut(&self) -> RwLockWriteGuard<KObjectState> {
-        todo!()
+        self.kobj_state.write()
     }
 
     fn set_kobj_state(&self, _state: KObjectState) {
-        todo!()
+        *self.kobj_state.write() = _state;
     }
 
     fn name(&self) -> alloc::string::String {
-        todo!()
+        self.inner.lock().name
     }
 
     fn set_name(&self, _name: alloc::string::String) {
-        todo!()
+        //not allow
     }
 
     fn set_kset(&self, _kset: Option<Arc<KSet>>) {
-        todo!()
+        self.inner.lock().kset = _kset;
     }
 
     fn set_parent(&self, _parent: Option<Weak<dyn KObject>>) {
-        todo!()
+        self.inner.lock().parent = _parent;
     }
 
     fn set_kobj_type(&self, _ktype: Option<&'static dyn KObjType>) {
-        todo!()
+        //not allow
     }
 }
 
@@ -493,7 +530,7 @@ impl Device for LockedAhciDisk {
     }
 
     fn id_table(&self) -> IdTable {
-        todo!()
+        IdTable::new("ahci disk".to_string(), None)
     }
 
     fn bus(&self) -> Option<Weak<dyn Bus>> {

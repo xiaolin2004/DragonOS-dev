@@ -56,14 +56,14 @@ pub struct HbaPort {
     pub sctl: u32,        // 0x2C, SATA control (SCR2:SControl)
     pub serr: u32,        // 0x30, SATA error (SCR1:SError)
     pub sact: u32,        // 0x34, SATA active (SCR3:SActive)
-    pub ci: u32,          // 0x38, command issue
-    pub sntf: u32,        // 0x3C, SATA notification (SCR4:SNotification)
-    pub fbs: u32,         // 0x40, FIS-based switch control
+    pub ci: u32, // 0x38, command issue（ci共有32位，每一位对应一个command slot，用于告知HBA请求命令生效）
+    pub sntf: u32, // 0x3C, SATA notification (SCR4:SNotification)
+    pub fbs: u32, // 0x40, FIS-based switch control
     pub _rsv1: [u32; 11], // 0x44 ~ 0x6F, Reserved
     pub vendor: [u32; 4], // 0x70 ~ 0x7F, vendor specific
 }
 
-/// 全称 HBA Memory Register，是HBA的寄存器在内存中的映射
+/// 全称 HBA Memory Register Generic Host Control，是HBA的寄存器在内存中的映射
 #[repr(packed)]
 pub struct HbaMem {
     pub cap: u32,             // 0x00, Host capability
@@ -86,12 +86,12 @@ pub struct HbaMem {
 /// 作用: 记录了内存中读/写数据的位置，以及长度。你可以把他类比成一个指针？
 #[repr(packed)]
 pub struct HbaPrdtEntry {
-    pub dba: u64, // Data base address
-    _rsv0: u32,   // Reserved
-    pub dbc: u32, // Byte count, 4M max, interrupt = 1
+    pub dba: u64, // Data base address DW0 DW1
+    _rsv0: u32,   // Reserved DW2
+    pub dbc: u32, // Data Byte count, 4M max, interrupt = 1  DW3
 }
 
-/// HAB Command Table
+/// HBA Command Table
 /// 每个 Port 一个 Table，主机和设备的交互都靠这个数据结构
 #[repr(packed)]
 pub struct HbaCmdTable {
@@ -111,9 +111,8 @@ pub struct HbaCmdTable {
 #[repr(packed)]
 pub struct HbaCmdHeader {
     // DW0
-    pub cfl: u8,
-    // Command FIS length in DWORDS: 5(len in [2, 16]), atapi: 1, write - host to device: 1, prefetchable: 1
-    pub _pm: u8,    // Reset - 0x80, bist: 0x40, clear busy on ok: 0x20, port multiplier
+    pub cfl: u8, // Command FIS length in DWORDS: 5(len in [2, 16]), atapi: 1, write - host to device: 1, prefetchable: 1
+    pub _pm: u8, // Reset - 0x80, bist: 0x40, clear busy on ok: 0x20, port multiplier
     pub prdtl: u16, // Physical region descriptor table length in entries
     // DW1
     pub _prdbc: u32, // Physical region descriptor byte count transferred
@@ -121,6 +120,27 @@ pub struct HbaCmdHeader {
     pub ctba: u64, // Command table descriptor base address
     // DW4 - 7
     pub _rsv1: [u32; 4], // Reserved
+}
+/// 两个收发信箱 cmdlist是发信箱，RecvFIS是收信箱
+/// HBA Command List（实际上无用，可以使用指针算术直接实现）
+// #[repr(packed)]
+// pub struct HbaCmdList{
+//     pub list:[HbaCmdHeader;32],
+// }
+
+/// HBA received FIS用于接收返回的FIS
+/// 配合中断方式处理返回FIS
+#[repr(packed)]
+pub struct HbaFIS {
+    pub dsfis: FisDmaSetup, //DMA Setup FIS
+    pub _empty1: u32,
+    pub psfis: FisPioSetup, //PIO Setup FIS
+    pub _empty2: [u8; 12],
+    pub rfis: FisRegD2H, //D2H Register FIS
+    pub _empty3: [u8; 4],
+    pub sdbfis: FisSetDeviceBits, //Set Device Bits FIS
+    pub ufis: [u8; 64],           //Unknown FIS (up to 64 bytes)
+    pub _rsv: [u8; 95],           //Reserved
 }
 
 /// Port 的函数实现
@@ -177,6 +197,8 @@ impl HbaPort {
 
     /// @return: 返回一个空闲 cmd table 的 id; 如果没有，则返回 Option::None
     pub fn find_cmdslot(&self) -> Option<u32> {
+        // sact是Device Status (DS) Prior to writing PxCI[TAG] to ‘1’, software will set DS[TAG] to ‘1’ to indicate that a command with that TAG is outstanding.
+        // ci是当前装有有效命令的cmdslot号
         let slots = volatile_read!(self.sact) | volatile_read!(self.ci);
         (0..32).find(|&i| slots & 1 << i == 0)
     }
@@ -399,4 +421,10 @@ pub struct FisDmaSetup {
 
     // DWORD 6
     pub rsv6: u32, // Reserved
+}
+
+#[repr(packed)]
+pub struct FisSetDeviceBits {
+    pub fis_type: u8,
+    pub bits: u8,
 }

@@ -63,7 +63,7 @@ DISK_NAME="disk-${ARCH}.img"
 
 QEMU=qemu-system-${ARCH}
 QEMU_DISK_IMAGE="../bin/${DISK_NAME}"
-QEMU_MEMORY="512M"
+QEMU_MEMORY="10240M"
 QEMU_MEMORY_BACKEND="dragonos-qemu-shm.ram"
 QEMU_MEMORY_BACKEND_PATH_PREFIX="/dev/shm"
 QEMU_SHM_OBJECT="-object memory-backend-file,size=${QEMU_MEMORY},id=${QEMU_MEMORY_BACKEND},mem-path=${QEMU_MEMORY_BACKEND_PATH_PREFIX}/${QEMU_MEMORY_BACKEND},share=on "
