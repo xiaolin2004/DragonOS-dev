@@ -6,8 +6,8 @@ use crate::driver::base::class::Class;
 use crate::driver::base::device::bus::{Bus, BusState};
 
 use crate::driver::base::device::driver::Driver;
-use crate::driver::base::device::{Device, DevicePrivateData, DeviceType, IdTable};
-use crate::driver::base::kobject::{KObjType, KObject, KObjectState, LockedKObjectState};
+use crate::driver::base::device::{Device, DeviceCommonData, DevicePrivateData, DeviceState, DeviceType, IdTable};
+use crate::driver::base::kobject::{KObjType, KObject, KObjectCommonData, KObjectState, LockedKObjectState};
 use crate::driver::base::kset::KSet;
 use crate::driver::disk::ahci::HBA_PxIS_TFES;
 
@@ -380,14 +380,23 @@ impl LockedAhciDisk {
         port_num: u8,
     ) -> Result<Arc<LockedAhciDisk>, SystemError> {
         // 构建磁盘结构体
-        let result: Arc<LockedAhciDisk> = Arc::new(LockedAhciDisk(SpinLock::new(AhciDisk {
-            name,
-            flags,
-            partitions: Default::default(),
-            ctrl_num,
-            port_num,
-            self_ref: Weak::default(),
-        })));
+        let result: Arc<LockedAhciDisk> = Arc::new(LockedAhciDisk{
+            lock:SpinLock::new(AhciDisk {
+                name: name.clone(),
+                flags,
+                partitions: Default::default(),
+                ctrl_num,
+                port_num,
+                self_ref: Weak::default(),
+        }),
+            inner: SpinLock::new(InnerLockedAhciDisk{
+                name:name.clone(),
+                pdata:DevicePrivateData::new(IdTable::new(name.clone(), None), DeviceState::Initialized),
+                cdata:DeviceCommonData::default(),
+                kobjdata:KObjectCommonData::default(),
+                synced:true,
+            }),
+            kobj_state: LockedKObjectState::new(None), });
 
         let table: MbrDiskPartionTable = result.read_mbr_table()?;
 
@@ -396,7 +405,7 @@ impl LockedAhciDisk {
             compiler_fence(Ordering::SeqCst);
             if table.dpte[i].part_type != 0 {
                 let w = Arc::downgrade(&result);
-                result.0.lock().partitions.push(Partition::new(
+                result.lock.lock().partitions.push(Partition::new(
                     table.dpte[i].starting_sector() as u64,
                     table.dpte[i].starting_lba as u64,
                     table.dpte[i].total_sectors as u64,
@@ -406,7 +415,7 @@ impl LockedAhciDisk {
             }
         }
 
-        result.0.lock().self_ref = Arc::downgrade(&result);
+        result.lock.lock().self_ref = Arc::downgrade(&result);
 
         return Ok(result);
     }
@@ -446,49 +455,38 @@ impl LockedAhciDisk {
         return Ok(table);
     }
 }
-#[derive(Debug,Clone)]
+#[derive(Debug)]
 pub struct InnerLockedAhciDisk{
     name:String,
-    data:DevicePrivateData,
-    state:BusState,  
-    parent:Option<Weak<dyn KObject>>,
-
-    kernfs_inode:Option<Arc<KernFSInode>>,
-    /// 当前设备挂载到的总线
-    bus:Option<Weak<dyn Bus>>,
-    /// 当前设备已经匹配的驱动
-    driver:Option<Weak<dyn Driver>>,
-
-    ktype:Option<&'static dyn KObjType>,
-    kset: Option<Arc<KSet>>,
+    pdata:DevicePrivateData,
+    cdata:DeviceCommonData,
+    kobjdata:KObjectCommonData,
+    synced:bool,
 }
 
-impl InnerLockedAhciDisk{
-
-}
 impl KObject for LockedAhciDisk {
     fn as_any_ref(&self) -> &dyn core::any::Any {
         self
     }
 
     fn inode(&self) -> Option<Arc<KernFSInode>> {
-        self.inner.lock().kernfs_inode
+        self.inner.lock().kobjdata.kern_inode.clone()
     }
 
     fn kobj_type(&self) -> Option<&'static dyn KObjType> {
-        self.inner.lock().ktype
+        self.inner.lock().kobjdata.kobj_type
     }
 
     fn kset(&self) -> Option<Arc<KSet>> {
-        self.inner.lock().kset
+        self.inner.lock().kobjdata.kset.clone()
     }
 
     fn parent(&self) -> Option<Weak<dyn KObject>> {
-        self.inner.lock().parent
+        self.inner.lock().kobjdata.get_parent_or_clear_weak()
     }
 
     fn set_inode(&self, _inode: Option<Arc<KernFSInode>>) {
-        self.inner.lock().kernfs_inode = _inode;
+        self.inner.lock().kobjdata.kern_inode=_inode;
     }
 
     fn kobj_state(&self) -> RwLockReadGuard<KObjectState> {
@@ -504,7 +502,7 @@ impl KObject for LockedAhciDisk {
     }
 
     fn name(&self) -> alloc::string::String {
-        self.inner.lock().name
+        self.inner.lock().name.clone()
     }
 
     fn set_name(&self, _name: alloc::string::String) {
@@ -512,11 +510,11 @@ impl KObject for LockedAhciDisk {
     }
 
     fn set_kset(&self, _kset: Option<Arc<KSet>>) {
-        self.inner.lock().kset = _kset;
+        self.inner.lock().kobjdata.kset = _kset;
     }
 
     fn set_parent(&self, _parent: Option<Weak<dyn KObject>>) {
-        self.inner.lock().parent = _parent;
+        self.inner.lock().kobjdata.parent = _parent;
     }
 
     fn set_kobj_type(&self, _ktype: Option<&'static dyn KObjType>) {
@@ -530,43 +528,43 @@ impl Device for LockedAhciDisk {
     }
 
     fn id_table(&self) -> IdTable {
-        IdTable::new("ahci disk".to_string(), None)
+        self.inner.lock().pdata.id_table().clone()
     }
 
     fn bus(&self) -> Option<Weak<dyn Bus>> {
-        todo!("LockedAhciDisk::bus()")
+        self.inner.lock().cdata.get_bus_weak_or_clear()
     }
 
     fn set_bus(&self, _bus: Option<Weak<dyn Bus>>) {
-        todo!("LockedAhciDisk::set_bus()")
+        self.inner.lock().cdata.bus = _bus;
     }
 
     fn driver(&self) -> Option<Arc<dyn Driver>> {
-        todo!("LockedAhciDisk::driver()")
+       self.inner.lock().cdata.get_driver_weak_or_clear().unwrap().upgrade()
     }
 
     fn is_dead(&self) -> bool {
-        false
+        self.inner.lock().cdata.dead
     }
 
     fn set_driver(&self, _driver: Option<Weak<dyn Driver>>) {
-        todo!("LockedAhciDisk::set_driver()")
+        self.inner.lock().cdata.driver = _driver;
     }
 
     fn can_match(&self) -> bool {
-        todo!()
+        self.inner.lock().cdata.can_match
     }
 
     fn set_can_match(&self, _can_match: bool) {
-        todo!()
+        self.inner.lock().cdata.can_match=_can_match;
     }
 
     fn state_synced(&self) -> bool {
-        todo!()
+        self.inner.lock().synced
     }
 
     fn set_class(&self, _class: Option<Weak<dyn Class>>) {
-        todo!()
+        self.inner.lock().cdata.class=_class;
     }
 }
 
@@ -582,20 +580,20 @@ impl BlockDevice for LockedAhciDisk {
     }
 
     fn sync(&self) -> Result<(), SystemError> {
-        return self.0.lock().sync();
+        return self.lock.lock().sync();
     }
 
     #[inline]
     fn device(&self) -> Arc<dyn Device> {
-        return self.0.lock().self_ref.upgrade().unwrap();
+        return self.lock.lock().self_ref.upgrade().unwrap();
     }
 
     fn block_size(&self) -> usize {
-        todo!()
+        1<<self.blk_size_log2()
     }
 
     fn partitions(&self) -> Vec<Arc<Partition>> {
-        return self.0.lock().partitions.clone();
+        return self.lock.lock().partitions.clone();
     }
 
     #[inline]
@@ -605,7 +603,7 @@ impl BlockDevice for LockedAhciDisk {
         count: usize,          // 读取lba的数量
         buf: &mut [u8],
     ) -> Result<usize, SystemError> {
-        self.0.lock().read_at(lba_id_start, count, buf)
+        self.lock.lock().read_at(lba_id_start, count, buf)
     }
 
     #[inline]
@@ -615,6 +613,6 @@ impl BlockDevice for LockedAhciDisk {
         count: usize,
         buf: &[u8],
     ) -> Result<usize, SystemError> {
-        self.0.lock().write_at(lba_id_start, count, buf)
+        self.lock.lock().write_at(lba_id_start, count, buf)
     }
 }

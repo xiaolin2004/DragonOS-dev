@@ -149,7 +149,7 @@ pub fn mount_root_fs() -> Result<(), SystemError> {
     kinfo!("Try to mount FAT32 as root fs...");
     let partiton: Arc<Partition> = ahci::get_disks_by_name("ahci_disk_0".to_string())
         .unwrap()
-        .0
+        .lock
         .lock()
         .partitions[0]
         .clone();

@@ -2,6 +2,7 @@
 pub mod ahci_inode;
 pub mod ahcidisk;
 pub mod hba;
+pub mod driver;
 
 use crate::driver::base::block::disk_info::BLK_GF_AHCI;
 use crate::driver::block::cache::cached_block_device::BlockCache;
@@ -129,6 +130,9 @@ pub fn ahci_init() -> Result<(), SystemError> {
                             format!("ahci_{}", id).as_str(),
                             LockedAhciInode::new(disks_list.last().unwrap().clone()),
                         );
+                        for disk in disks_list.as_slice(){
+                            // pci_device_manager().device_add(disk)?;
+                        }
                         if let Err(err) = ret {
                             kerror!(
                                 "Ahci_{} ctrl = {}, port = {} failed to register, error code = {:?}",
@@ -143,6 +147,7 @@ pub fn ahci_init() -> Result<(), SystemError> {
             }
         }
         BlockCache::init();
+        // TODO 在此向PCI总线添加device
     }
 
     compiler_fence(core::sync::atomic::Ordering::SeqCst);
@@ -161,7 +166,7 @@ pub fn get_disks_by_name(name: String) -> Result<Arc<LockedAhciDisk>, SystemErro
     let disks_list: SpinLockGuard<Vec<Arc<LockedAhciDisk>>> = LOCKED_DISKS_LIST.lock();
     let result = disks_list
         .iter()
-        .find(|x| x.0.lock().name == name)
+        .find(|x| x.lock.lock().name == name)
         .ok_or(SystemError::ENXIO)?
         .clone();
     return Ok(result);
