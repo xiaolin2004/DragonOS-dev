@@ -2,6 +2,7 @@
 pub mod ahci_inode;
 pub mod ahcidisk;
 pub mod hba;
+pub mod ahci_ops;
 
 use crate::driver::base::block::disk_info::BLK_GF_AHCI;
 // 依赖的rust工具包

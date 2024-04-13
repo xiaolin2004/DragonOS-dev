@@ -1,0 +1,96 @@
+struct ata_port_operations ahci_ops = {
+	.inherits		= &sata_pmp_port_ops,
+
+	.qc_defer		= ahci_pmp_qc_defer,
+	.qc_prep		= ahci_qc_prep,
+	.qc_issue		= ahci_qc_issue,
+	.qc_fill_rtf		= ahci_qc_fill_rtf,
+	.qc_ncq_fill_rtf	= ahci_qc_ncq_fill_rtf,
+
+	.freeze			= ahci_freeze,
+	.thaw			= ahci_thaw,
+	.softreset		= ahci_softreset,
+	.hardreset		= ahci_hardreset,
+	.postreset		= ahci_postreset,
+	.pmp_softreset		= ahci_softreset,
+	.error_handler		= ahci_error_handler,
+	.post_internal_cmd	= ahci_post_internal_cmd,
+	.dev_config		= ahci_dev_config,
+
+	.scr_read		= ahci_scr_read,
+	.scr_write		= ahci_scr_write,
+	.pmp_attach		= ahci_pmp_attach,
+	.pmp_detach		= ahci_pmp_detach,
+
+	.set_lpm		= ahci_set_lpm,
+	.em_show		= ahci_led_show,
+	.em_store		= ahci_led_store,
+	.sw_activity_show	= ahci_activity_show,
+	.sw_activity_store	= ahci_activity_store,
+	.transmit_led_message	= ahci_transmit_led_message,
+#ifdef CONFIG_PM
+	.port_suspend		= ahci_port_suspend,
+	.port_resume		= ahci_port_resume,
+#endif
+	.port_start		= ahci_port_start,
+	.port_stop		= ahci_port_stop,
+};
+
+static int ahci_set_lpm(struct ata_link *link, enum ata_lpm_policy policy,
+    unsigned hints);
+static ssize_t ahci_led_show(struct ata_port *ap, char *buf);
+static ssize_t ahci_led_store(struct ata_port *ap, const char *buf,
+          size_t size);
+static ssize_t ahci_transmit_led_message(struct ata_port *ap, u32 state,
+            ssize_t size);
+
+
+
+static int ahci_scr_read(struct ata_link *link, unsigned int sc_reg, u32 *val);
+static int ahci_scr_write(struct ata_link *link, unsigned int sc_reg, u32 val);
+static void ahci_qc_fill_rtf(struct ata_queued_cmd *qc);
+static void ahci_qc_ncq_fill_rtf(struct ata_port *ap, u64 done_mask);
+static int ahci_port_start(struct ata_port *ap);
+static void ahci_port_stop(struct ata_port *ap);
+static enum ata_completion_errors ahci_qc_prep(struct ata_queued_cmd *qc);
+static int ahci_pmp_qc_defer(struct ata_queued_cmd *qc);
+static void ahci_freeze(struct ata_port *ap);
+static void ahci_thaw(struct ata_port *ap);
+static void ahci_set_aggressive_devslp(struct ata_port *ap, bool sleep);
+static void ahci_enable_fbs(struct ata_port *ap);
+static void ahci_disable_fbs(struct ata_port *ap);
+static void ahci_pmp_attach(struct ata_port *ap);
+static void ahci_pmp_detach(struct ata_port *ap);
+static int ahci_softreset(struct ata_link *link, unsigned int *class,
+      unsigned long deadline);
+static int ahci_pmp_retry_softreset(struct ata_link *link, unsigned int *class,
+      unsigned long deadline);
+static int ahci_hardreset(struct ata_link *link, unsigned int *class,
+      unsigned long deadline);
+static void ahci_postreset(struct ata_link *link, unsigned int *class);
+static void ahci_post_internal_cmd(struct ata_queued_cmd *qc);
+static void ahci_dev_config(struct ata_device *dev);
+#ifdef CONFIG_PM
+static int ahci_port_suspend(struct ata_port *ap, pm_message_t mesg);
+#endif
+static ssize_t ahci_activity_show(struct ata_device *dev, char *buf);
+static ssize_t ahci_activity_store(struct ata_device *dev,
+           enum sw_activity val);
+static void ahci_init_sw_activity(struct ata_link *link);
+
+static ssize_t ahci_show_host_caps(struct device *dev,
+           struct device_attribute *attr, char *buf);
+static ssize_t ahci_show_host_cap2(struct device *dev,
+           struct device_attribute *attr, char *buf);
+static ssize_t ahci_show_host_version(struct device *dev,
+              struct device_attribute *attr, char *buf);
+static ssize_t ahci_show_port_cmd(struct device *dev,
+          struct device_attribute *attr, char *buf);
+static ssize_t ahci_read_em_buffer(struct device *dev,
+           struct device_attribute *attr, char *buf);
+static ssize_t ahci_store_em_buffer(struct device *dev,
+            struct device_attribute *attr,
+            const char *buf, size_t size);
+static ssize_t ahci_show_em_supported(struct device *dev,
+              struct device_attribute *attr, char *buf);
+static irqreturn_t ahci_single_level_irq_intr(int irq, void *dev_instance);
