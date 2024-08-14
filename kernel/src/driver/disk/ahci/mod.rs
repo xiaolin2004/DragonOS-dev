@@ -13,7 +13,7 @@ use crate::driver::pci::pci::{
 use crate::filesystem::devfs::devfs_register;
 
 use crate::driver::disk::ahci::{
-    ahcidisk::LockedAhciDisk,
+    ahcidisk::AhciDisk,
     hba::HbaMem,
     hba::{HbaPort, HbaPortType},
 };
@@ -28,7 +28,7 @@ use system_error::SystemError;
 
 // 仅module内可见 全局数据区  hbr_port, disks
 static LOCKED_HBA_MEM_LIST: SpinLock<Vec<&mut HbaMem>> = SpinLock::new(Vec::new());
-static LOCKED_DISKS_LIST: SpinLock<Vec<Arc<LockedAhciDisk>>> = SpinLock::new(Vec::new());
+static LOCKED_DISKS_LIST: SpinLock<Vec<Arc<AhciDisk>>> = SpinLock::new(Vec::new());
 
 const AHCI_CLASS: u8 = 0x1;
 const AHCI_SUBCLASS: u8 = 0x6;
@@ -125,7 +125,7 @@ pub fn ahci_init() -> Result<(), SystemError> {
                         drop(hba_mem_list);
                         compiler_fence(core::sync::atomic::Ordering::SeqCst);
                         // 创建 disk
-                        disks_list.push(LockedAhciDisk::new(
+                        disks_list.push(AhciDisk::new(
                             format!("ahci_disk_{}", id),
                             BLK_GF_AHCI,
                             hba_mem_index as u8,
@@ -162,17 +162,17 @@ pub fn ahci_init() -> Result<(), SystemError> {
 
 /// @brief: 获取所有的 disk
 #[allow(dead_code)]
-pub fn disks() -> Vec<Arc<LockedAhciDisk>> {
+pub fn disks() -> Vec<Arc<AhciDisk>> {
     let disks_list = LOCKED_DISKS_LIST.lock();
     return disks_list.clone();
 }
 
 /// @brief: 通过 name 获取 disk
-pub fn get_disks_by_name(name: String) -> Result<Arc<LockedAhciDisk>, SystemError> {
-    let disks_list: SpinLockGuard<Vec<Arc<LockedAhciDisk>>> = LOCKED_DISKS_LIST.lock();
+pub fn get_disks_by_name(name: String) -> Result<Arc<AhciDisk>, SystemError> {
+    let disks_list: SpinLockGuard<Vec<Arc<AhciDisk>>> = LOCKED_DISKS_LIST.lock();
     let result = disks_list
         .iter()
-        .find(|x| x.0.lock().name == name)
+        .find(|x| x.private().name == name)
         .ok_or(SystemError::ENXIO)?
         .clone();
     return Ok(result);

@@ -1,3 +1,12 @@
+/**/
+use alloc::{
+    string::String,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
+
+use system_error::SystemError;
+
 use crate::driver::base::block::block_device::BlockDevice;
 use crate::driver::base::device::device_number::{DeviceNumber, Major};
 use crate::filesystem::devfs::{DevFS, DeviceINode};
@@ -8,14 +17,8 @@ use crate::filesystem::vfs::{
 };
 use crate::libs::spinlock::SpinLockGuard;
 use crate::{libs::spinlock::SpinLock, time::PosixTimeSpec};
-use alloc::{
-    string::String,
-    sync::{Arc, Weak},
-    vec::Vec,
-};
-use system_error::SystemError;
 
-use super::ahcidisk::LockedAhciDisk;
+use super::ahcidisk::AhciDisk;
 
 #[derive(Debug)]
 pub struct AhciInode {
@@ -28,14 +31,14 @@ pub struct AhciInode {
     /// INode 元数据
     metadata: Metadata,
     /// INode 对应的磁盘
-    disk: Arc<LockedAhciDisk>,
+    disk: Arc<AhciDisk>,
 }
 
 #[derive(Debug)]
 pub struct LockedAhciInode(pub SpinLock<AhciInode>);
 
 impl LockedAhciInode {
-    pub fn new(disk: Arc<LockedAhciDisk>) -> Arc<Self> {
+    pub fn new(disk: Arc<AhciDisk>) -> Arc<Self> {
         let inode = AhciInode {
             // uuid: Uuid::new_v5(),
             self_ref: Weak::default(),

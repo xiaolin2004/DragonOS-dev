@@ -1,14 +1,15 @@
-use core::{any::Any, fmt::Debug};
-
 use alloc::{
     string::{String, ToString},
     sync::{Arc, Weak},
     vec::Vec,
 };
+use core::{any::Any, fmt::Debug};
+
 use log::{debug, error};
+use virtio_drivers::device::blk::VirtIOBlk;
+
 use system_error::SystemError;
 use unified_init::macros::unified_init;
-use virtio_drivers::device::blk::VirtIOBlk;
 
 use crate::{
     driver::{
@@ -83,6 +84,7 @@ pub struct VirtIOBlkDevice {
 }
 
 unsafe impl Send for VirtIOBlkDevice {}
+
 unsafe impl Sync for VirtIOBlkDevice {}
 
 impl VirtIOBlkDevice {

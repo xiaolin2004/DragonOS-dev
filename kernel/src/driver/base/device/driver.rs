@@ -50,9 +50,9 @@ pub fn driver_manager() -> &'static DriverManager {
 ///
 /// ## 注意
 ///
-/// 由于设备驱动模型需要从Arc<dyn KObject>转换为Arc<dyn Driver>，
+/// 由于设备驱动模型需要从Arc</**/dyn KObject>转换为Arc<dyn Driver>，
 /// 因此，所有的实现了 Driver trait的结构体，都应该在结构体上方标注`#[cast_to([sync] Driver)]`，
-/// 否则在运行时会报错
+/// 否则在运行时会报错/**/
 pub trait Driver: Sync + Send + Debug + KObject {
     fn coredump(&self, _device: &Arc<dyn Device>) -> Result<(), SystemError> {
         Err(SystemError::ENOSYS)

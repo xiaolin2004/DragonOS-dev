@@ -119,8 +119,7 @@ fn root_partition() -> Arc<Partition> {
         use alloc::string::ToString;
         return crate::driver::disk::ahci::get_disks_by_name("ahci_disk_0".to_string())
             .unwrap()
-            .0
-            .lock()
+            .private()
             .partitions[0]
             .clone();
     }
