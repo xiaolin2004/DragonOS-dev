@@ -4,20 +4,19 @@ use alloc::{
     string::{String, ToString},
     sync::{Arc, Weak},
     vec::Vec,
+    collections::BTreeMap,
 };
 use bitmap::traits::BitMapOps;
 use log::error;
 use system_error::SystemError;
 use unified_init::macros::unified_init;
 use virtio_drivers::device::blk::{VirtIOBlk, SECTOR_SIZE};
-
+use crate::driver::base::block::block_layer::{bio::{BioStatus, BioType, SubmittedBio}, request_queue::BioRequest};
 use crate::{
     driver::{
         base::{
             block::{
-                block_device::{BlockDevName, BlockDevice, BlockId, GeneralBlockRange, LBA_SIZE},
-                disk_info::Partition,
-                manager::{block_dev_manager, BlockDevMeta},
+                block_device::{BlockDevName, BlockDevice, BlockId, GeneralBlockRange, LBA_SIZE}, block_layer::request_queue::BioRequestSingleQueue, disk_info::Partition, manager::{block_dev_manager, BlockDevMeta}
             },
             class::Class,
             device::{
@@ -63,6 +62,7 @@ pub fn virtio_blk_0() -> Option<Arc<VirtIOBlkDevice>> {
         .map(|dev| dev.arc_any().downcast().unwrap())
 }
 
+/// Add a virtio_blk device using given transport type and dev_id
 pub fn virtio_blk(transport: VirtIOTransport, dev_id: Arc<DeviceId>) {
     let device = VirtIOBlkDevice::new(transport, dev_id);
     if let Some(device) = device {
@@ -72,6 +72,7 @@ pub fn virtio_blk(transport: VirtIOTransport, dev_id: Arc<DeviceId>) {
     }
 }
 
+/// Global virtio_blk manager
 static mut VIRTIOBLK_MANAGER: Option<VirtIOBlkManager> = None;
 
 #[inline]
@@ -146,6 +147,8 @@ pub struct VirtIOBlkDevice {
     inner: SpinLock<InnerVirtIOBlkDevice>,
     locked_kobj_state: LockedKObjectState,
     self_ref: Weak<Self>,
+    request_queue:BioRequestSingleQueue,
+    submitted_requests:SpinLock<BTreeMap<u16, SubmittedRequest>>,
 }
 
 unsafe impl Send for VirtIOBlkDevice {}
@@ -175,7 +178,9 @@ impl VirtIOBlkDevice {
                 device_common: DeviceCommonData::default(),
                 kobject_common: KObjectCommonData::default(),
                 irq,
+                submitted_requests: BTreeMap::new(),
             }),
+            request_queue:BioRequestSingleQueue::new(),
         });
 
         dev.set_driver(Some(Arc::downgrade(
@@ -188,8 +193,50 @@ impl VirtIOBlkDevice {
     fn inner(&self) -> SpinLockGuard<InnerVirtIOBlkDevice> {
         self.inner.lock()
     }
-}
 
+     /// Handles the irq issued from the device
+     /// Device will issue irq when it has completed the request
+    fn handle_irq(&self){
+        loop{
+            let completed_request = {
+                let queue = self.inner().device_inner.peek_used();
+                let token = queue.unwrap();
+                self.submitted_requests.lock().remove(&token).unwrap()
+            };
+
+            completed_request.bio_request.bios().for_each(|bio|{
+                bio.complete(BioStatus::Complete);
+            });
+
+        }
+    }
+
+    fn handle_request(&self){
+        let request = self.request_queue.dequeue();
+        match request.type_(){
+            BioType::Read => {
+                self.read_async(request);
+            }
+            BioType::Write => {
+                self.write_async(request);  
+            }
+            _ => {
+                error!("VirtIOBlkDevice '{:?}' handle_request failed: unsupported request type", self.dev_id);
+            }
+        }
+    }
+    /// Reads data from the device, this function is non-blocking.
+    fn read_async(&self, request: BioRequest){
+        // 如何确定request目的内存不会被其他线程侵占?
+        todo!()
+    }
+
+    /// Writes data to the device, this function is non-blocking.
+    fn write_async(&self, request: BioRequest){
+        todo!()
+    }
+
+}
 impl BlockDevice for VirtIOBlkDevice {
     fn dev_name(&self) -> &BlockDevName {
         &self.blkdev_meta.devname
@@ -246,6 +293,7 @@ impl BlockDevice for VirtIOBlkDevice {
         Ok(count)
     }
 
+    
     fn sync(&self) -> Result<(), SystemError> {
         Ok(())
     }
@@ -272,6 +320,14 @@ impl BlockDevice for VirtIOBlkDevice {
             .expect("Failed to get MBR partition table");
         mbr_table.partitions(Arc::downgrade(&device))
     }
+    
+    fn request_queue(&self) -> &BioRequestSingleQueue {
+        &self.request_queue
+    }
+
+    fn enqueue(&self, bio: SubmittedBio) -> Result<(), SystemError> {
+        self.request_queue().enqueue(bio).map_err(|_| SystemError::EIO)
+    }
 }
 
 struct InnerVirtIOBlkDevice {
@@ -281,6 +337,7 @@ struct InnerVirtIOBlkDevice {
     device_common: DeviceCommonData,
     kobject_common: KObjectCommonData,
     irq: Option<IrqNumber>,
+    submitted_requests: BTreeMap<u16, SubmittedRequest>,
 }
 
 impl Debug for InnerVirtIOBlkDevice {
@@ -619,5 +676,22 @@ impl KObject for VirtIOBlkDriver {
 
     fn set_kobj_state(&self, state: KObjectState) {
         *self.kobj_state.write() = state;
+    }
+}
+
+
+/// A submitted bio request for callback.
+#[derive(Debug)]
+struct SubmittedRequest {
+    id: u16,
+    bio_request: BioRequest,
+}
+
+impl SubmittedRequest {
+    pub fn new(id: u16, bio_request: BioRequest) -> Self {
+        Self {
+            id,
+            bio_request,
+        }
     }
 }

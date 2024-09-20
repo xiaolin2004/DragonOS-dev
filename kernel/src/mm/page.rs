@@ -124,7 +124,7 @@ impl Page {
         self.map_count -= 1;
     }
 
-    /// 判断当前物理页是否能被回
+    /// 判断当前物理页是否能被回收
     pub fn can_deallocate(&self) -> bool {
         self.map_count == 0 && self.free_when_zero
     }

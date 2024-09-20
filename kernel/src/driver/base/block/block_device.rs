@@ -18,7 +18,7 @@ use core::{any::Any, fmt::Display, ops::Deref};
 use log::error;
 use system_error::SystemError;
 
-use super::{disk_info::Partition, gendisk::GenDisk, manager::BlockDevMeta};
+use super::{block_layer::{bio::SubmittedBio, request_queue::BioRequestSingleQueue}, disk_info::Partition, gendisk::GenDisk, manager::BlockDevMeta};
 
 /// 该文件定义了 Device 和 BlockDevice 的接口
 /// Notice 设备错误码使用 Posix 规定的 int32_t 的错误码表示，而不是自己定义错误enum
@@ -295,6 +295,9 @@ pub trait BlockDevice: Device {
     /// 获取设备的扇区范围
     fn disk_range(&self) -> GeneralBlockRange;
 
+    // 获取请求队列
+    fn request_queue(&self) ->&BioRequestSingleQueue;
+
     /// @brief: 在块设备中，从第lba_id_start个块开始，读取count个块数据，存放到buf中
     ///
     /// @parameter lba_id_start: 起始块
@@ -490,6 +493,10 @@ pub trait BlockDevice: Device {
     /// # gendisk注册成功的回调函数
     fn callback_gendisk_registered(&self, _gendisk: &Arc<GenDisk>) -> Result<(), SystemError> {
         Ok(())
+    }
+
+    fn enqueue(&self, bio: SubmittedBio) -> Result<(), SystemError> {
+        self.request_queue().enqueue(bio).map_err(|e| e.into())
     }
 }
 
