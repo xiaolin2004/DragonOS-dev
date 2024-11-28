@@ -71,10 +71,6 @@ impl Shutdown {
         self.bit.load(core::sync::atomic::Ordering::SeqCst) == 0
     }
 
-    pub fn from_how(how: usize) -> Self {
-        Self::from(ShutdownBit::from_bits_truncate(how as u8))
-    }
-
     pub fn get(&self) -> ShutdownTemp {
         ShutdownTemp {
             bit: self.bit.load(core::sync::atomic::Ordering::SeqCst),
@@ -131,3 +127,5 @@ impl TryFrom<usize> for ShutdownTemp {
         }
     }
 }
+
+
